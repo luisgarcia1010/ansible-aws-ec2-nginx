@@ -1,0 +1,141 @@
+---
+
+ - name: create VPC
+   ec2_vpc_net:
+     name: "{{ vpc_name }}"
+     cidr_block: "{{ vpc_cidr }}"
+     region: "{{ region }}"
+     state: present
+   register: vpc
+
+ - name: Set VPC ID in variable
+   set_fact:
+     vpc_id: "{{ vpc.vpc.id }}"
+
+ - name: associate subnet to the VPC
+   ec2_vpc_subnet:
+    state: present
+    vpc_id: "{{ vpc_id }}"
+    region: "{{ region }}"
+    cidr: "{{ item.subnet }}"
+    az: "{{ item.zone }}"
+    map_public: yes
+    resource_tags:
+      Name: "{{ subnet_name }}"
+   loop: "{{ subnet_cidr }}"
+   register: subnet
+
+ - name: create IGW
+   ec2_vpc_igw:
+    vpc_id: "{{ vpc_id }}"
+    region: "{{ region }}"
+    state: "present"
+    tags:
+      Name: "{{ igw_name }}"
+   register: igw
+
+ - name: Route IGW
+   ec2_vpc_route_table:
+    vpc_id: "{{ vpc_id }}"
+    region: "{{ region }}"
+    subnets: "{{ subnet.results | map(attribute='subnet.id') | list }}"
+    routes:
+      - dest: 0.0.0.0/0
+        gateway_id: "{{ igw.gateway_id  }}"
+    tags:
+      Name: "{{ route_name }}"
+
+ - name: Create Security Group
+   ec2_group:
+    name: Web DMZ
+    description: DMZ Security Group
+    vpc_id: "{{ vpc_id }}"
+    region: "{{ region }}"
+    rules:
+      - proto: tcp
+        ports:
+        - 80
+        cidr_ip: 0.0.0.0/0
+      - proto: tcp
+        ports:
+        - 22
+        cidr_ip: 0.0.0.0/0
+   register: security_group
+
+ - name: create a new ec2 key pair, returns generated private key
+   ec2_key:
+    name: "{{ keypair_name }}"
+    region: "{{ region }}"
+   register: keypair
+   tags:
+    - ec2_key
+
+ - debug:
+      var: keypair
+   tags:
+    - ec2_key
+
+ - name: Copy EC2 Key Pair private key locally
+   copy: 
+     content: "{{ keypair.key.private_key }}" 
+     dest: "{{ ec2_key_directory }}/aws_key.pem"
+     mode: '0600'
+   when: keypair.changed == true
+   tags:
+    - ec2_key
+
+ - name: Create EC2 Instance
+   ec2_instance:
+     name: "{{ item.0 }}"
+     key_name: "{{ keypair.key.name }}"
+     vpc_subnet_id: "{{ item.1 }}"
+     instance_type: t2.micro
+     region: "{{ region }}"
+     security_group: "{{ security_group.group_id }}"
+     image_id: ami-06148e0e81e5187c8
+     tags:
+       Environment: Testing
+   loop: "{{ web_instance_tags_name | zip(subnet.results | map(attribute='subnet.id')) | list }}"
+   register: instance_id
+
+ - name: Create the custom fact for targets                                       
+   set_fact:                                                                      
+     target_data: "{{ target_data|default([]) + [{'Id': item.instance_ids[0], 'Port': 80 }]}}"
+   loop: "{{ instance_id.results }}"   
+
+ - name: Create a target group with a default health check
+   elb_target_group:
+     name: ansible-target-group
+     protocol: http
+     port: 80
+     vpc_id: "{{ vpc_id }}"
+     targets: "{{ target_data }}"
+     state: present
+
+ - name: Create ALB check 
+   elb_application_lb:
+     name: myalb
+     region: "{{ region }}"
+     security_groups:
+       - "{{ security_group.group_id }}"
+     subnets: "{{ subnet.results | map(attribute='subnet.id') | list }}"
+     listeners:
+       - Protocol: HTTP # Required. The protocol for connections from clients to the load balancer (HTTP or HTTPS) (case-sensitive).
+         Port: 80 # Required. The port on which the load balancer is listening.
+        # The security policy that defines which ciphers and protocols are supported. The default is the current predefined security policy.
+         DefaultActions:
+           - Type: forward # Required.
+             TargetGroupName: ansible-target-group # Required. The name of the target group
+     state: present
+   register: alb
+
+ - debug:
+    msg: "ALB DNS NAME: {{ alb.dns_name }}"
+
+ - name: Add the newly created EC2 instance(s) to the local host group
+   lineinfile:
+     path: "../hosts"
+     regexp: "{{ item.instances[0].public_ip_address }}"
+     insertafter: "[web]" 
+     line: "{{ item.instances[0].public_ip_address }} ansible_user=ubuntu ansible_ssh_private_key_file={{ ec2_key_directory }}/aws_key.pem ansible_ssh_extra_args='-o StrictHostKeyChecking=no'"
+   loop: "{{ instance_id.results }}"

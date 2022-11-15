@@ -1,0 +1,31 @@
+---
+
+aws_access_key: ""
+aws_secret_key: ""
+region: "eu-central-1"
+
+# VPC
+vpc_cidr: "10.0.0.0/16"
+vpc_name: "Ansible VPC3"
+
+# Subnet
+subnet_name: "Ansible Subnet"
+subnet_cidr:
+  - subnet: "10.0.1.0/24"
+    zone: "eu-central-1a"
+  - subnet: "10.0.2.0/24"
+    zone: "eu-central-1b"
+
+igw_name: "Traffic IGW"
+
+
+#route table name
+route_name: "Public Ansible"
+
+securitygroup_name: "Ansible Security Group"
+
+ec2_tag: "WebServer"
+
+#key storage location
+ec2_key_directory: "/opt"
+keypair_name: "ansible_key"

@@ -1,0 +1,87 @@
+---
+
+- hosts: local
+  connection: local
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ aws_access_key }}"
+    AWS_SECRET_ACCESS_KEY: "{{ aws_secret_key }}"
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+  roles:
+    - ansible-aws-ec2
+  tasks:
+    - meta: refresh_inventory
+    - pause:
+       seconds: 10
+
+- name: Web server install
+  hosts: web
+  become: true
+  handlers:
+   - name: check nginx.conf
+     command: docker exec nginx nginx -t
+
+   - name: reload nginx
+     command: docker kill -s HUP nginx
+
+  tasks:
+    - name: Install apt-transport-https
+      ansible.builtin.apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - lsb-release
+          - gnupg
+          - python3-apt
+          - python3-pip
+        state: latest
+        update_cache: true
+
+    - name: Add signing key
+      ansible.builtin.apt_key:
+        url: "https://download.docker.com/linux/{{ ansible_distribution | lower }}/gpg"
+        state: present
+
+    - name: Add repository into sources list
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/{{ ansible_distribution | lower }} {{ ansible_distribution_release }} stable"
+        state: present
+        filename: docker
+
+    - name: Install Docker
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - docker-compose-plugin
+          - containerd.io
+        state: latest
+        update_cache: true
+     
+    - name: Install python module
+      pip:
+       name:
+        - docker
+        - docker-compose    
+
+    - name: Copy index file
+      copy:
+       src: ../files/index.html
+       dest: "/opt/index.html"
+      notify:
+       - check nginx.conf
+       - reload nginx 
+
+    - name: "Run nginx docker instance"
+      docker_container:
+       name: "nginx"
+       image: "nginx:alpine"
+       state: started
+       restart_policy: unless-stopped
+       recreate: "{{ docker_recreate | default('no') }}"
+       pull: "{{ docker_pull | default('no') }}"
+       networks_cli_compatible: yes
+       ports:
+        - "80:80"
+       volumes:
+        - "/opt/index.html:/usr/share/nginx/html/index.html:ro"

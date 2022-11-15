@@ -1,0 +1,7 @@
+[local]
+localhost ansible_python_interpreter="/usr/bin/python3"
+
+[web]
+3.68.160.12 ansible_user=ubuntu ansible_ssh_private_key_file=/opt/aws_key.pem ansible_ssh_extra_args='-o StrictHostKeyChecking=no'
+52.28.215.53 ansible_user=ubuntu ansible_ssh_private_key_file=/opt/aws_key.pem ansible_ssh_extra_args='-o StrictHostKeyChecking=no'
+
